@@ -43,8 +43,10 @@
 	],
 	"repository": {
 		"type": "git",
-		"url": "git+https://github.com/ravalkrushna1/sitegraph.git"
+		"url": "git+https://github.com/ravalkrushna1/sitegraph.git",
+		"directory": "native"
 	},
 	"license": "MIT",
-	"packageManager": "pnpm@10.33.0"
+	"packageManager": "pnpm@10.33.0",
+	"homepage": "https://github.com/ravalkrushna1/sitegraph/tree/main/native#readme"
 }
