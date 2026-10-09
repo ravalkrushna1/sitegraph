@@ -16,7 +16,8 @@ import {
 	TYPE_LABEL,
 } from "./api.js";
 import { Details } from "./details.js";
-import { GraphCanvas, type Point, ringLayout } from "./graph-canvas.js";
+import { GraphCanvas } from "./graph-canvas.js";
+import { type Point, relax, seedRing } from "./layout.js";
 import { useNodeSearch } from "./node-picker.js";
 
 interface Graph {
@@ -38,7 +39,11 @@ function merge(graph: Graph, around: string, nodes: Node[], edges: Edge[]): Grap
 	for (const n of nodes) next.nodes.set(n.id, n);
 	for (const e of edges) next.edges.set(e.id, e);
 	if (!next.pos.has(around)) next.pos.set(around, { x: 0, y: 0 });
-	for (const [id, p] of ringLayout(next.pos.get(around)!, nodes.map((n) => n.id), next.pos)) next.pos.set(id, p);
+	const fresh = seedRing(next.pos.get(around)!, nodes.map((n) => n.id), next.pos);
+	if (fresh.size === 0) return next;
+	for (const [id, p] of fresh) next.pos.set(id, p);
+	// Only the newly shown nodes move, so what's already on screen stays where it was.
+	next.pos = relax(next.pos, [...next.edges.values()], new Set(fresh.keys()));
 	return next;
 }
 
@@ -114,15 +119,16 @@ export function Explorer() {
 		}
 		for (const [d, ids] of rings) {
 			ids.forEach((id, i) => {
-				const angle = (2 * Math.PI * i) / ids.length;
+				const angle = (2 * Math.PI * i) / ids.length - Math.PI / 2 + d * 0.6;
 				const r = 260 * Math.max(d, 0.6);
 				pos.set(id, { x: r * Math.cos(angle), y: r * Math.sin(angle) });
 			});
 		}
+		const movable = new Set([...pos.keys()].filter((id) => id !== impact.start));
 		setGraph({
 			nodes: new Map(impact.nodes.map((n) => [n.id, n])),
 			edges: new Map(impact.edges.map((e) => [e.id, e])),
-			pos,
+			pos: relax(pos, impact.edges, movable),
 			expanded: new Set([impact.start]),
 		});
 		setCenterId(impact.start);
@@ -259,8 +265,22 @@ function StageEmpty({ brokenCount, onPick }: { brokenCount: number; onPick: (id:
 	return (
 		<div className="sg-stage-empty">
 			<div className="sg-stage-empty-body">
-				<h2>Pick a starting point</h2>
-				<p>Choose a page, URL or service on the left to see what it's connected to. A key page like your pricing or sign-up page is a good first look.</p>
+				<h2>How to use SiteGraph</h2>
+				<ol className="sg-steps">
+					<li>
+						<strong>Pick something on the left.</strong> Its connections appear here. Double-click any box to follow
+						its connections further.
+					</li>
+					<li>
+						<strong>Add what your CMS can't see.</strong> Forms, services like your CRM, workflows and owners, with{" "}
+						<em>Add a form, service or workflow</em>, then <em>Add a relationship</em> on a page.
+					</li>
+					<li>
+						<strong>Before you change something, open its Impact tab.</strong> It lists everything that depends on it,
+						step by step.
+					</li>
+				</ol>
+				<p>The map keeps itself up to date when entries are saved. Rescan after bulk imports.</p>
 				{brokenCount > 0 ? (
 					<Button onClick={() => void showBroken()}>
 						{brokenCount === 1 ? "Show the broken link" : `Show a broken link (${brokenCount})`}

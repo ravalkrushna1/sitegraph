@@ -6,11 +6,10 @@ import * as React from "react";
 
 import { type Edge, isBroken, type Node, RELATION_LABEL, TYPE_LABEL } from "./api.js";
 
-export type Point = { x: number; y: number };
-type View = { x: number; y: number; k: number };
+import { NODE_H as H, NODE_W as W, type Point } from "./layout.js";
 
-const W = 176;
-const H = 62;
+export type { Point };
+type View = { x: number; y: number; k: number };
 const MIN_K = 0.2;
 const MAX_K = 2;
 const DRAG_THRESHOLD = 4;
@@ -220,20 +219,4 @@ export function GraphCanvas({
 			</div>
 		</div>
 	);
-}
-
-/** Place new nodes on a ring around `origin`, nudging past spots already taken. */
-export function ringLayout(origin: Point, ids: string[], taken: Map<string, Point>): Map<string, Point> {
-	const placed = new Map<string, Point>();
-	const fresh = ids.filter((id) => !taken.has(id));
-	const radius = Math.max(220, fresh.length * 30);
-	fresh.forEach((id, i) => {
-		const angle = (2 * Math.PI * i) / Math.max(fresh.length, 1) - Math.PI / 2;
-		let point = { x: origin.x + radius * Math.cos(angle), y: origin.y + radius * Math.sin(angle) };
-		const crowded = (p: Point) =>
-			[...taken.values(), ...placed.values()].some((q) => Math.abs(q.x - p.x) < W && Math.abs(q.y - p.y) < H + 12);
-		for (let step = 0; step < 6 && crowded(point); step++) point = { x: point.x + 60, y: point.y + 80 };
-		placed.set(id, point);
-	});
-	return placed;
 }
