@@ -30,8 +30,19 @@ export interface ImpactResult {
 }
 
 /**
- * Bounded breadth-first search. "outbound" follows what the start node points at;
- * "inbound" finds what points at it (what could break if it changes). Each node is
+ * Most relations read "source depends on target" (a page links to a URL, a form submits to a
+ * CRM). PART_OF reads the other way: the workflow depends on its parts. RELATED_TO has no
+ * direction. So "inbound" (what depends on this) walks edges backwards, except PART_OF.
+ */
+function follows(relation: EdgeRecord["relation"], dir: "inbound" | "outbound", direction: "inbound" | "outbound"): boolean {
+	if (relation === "RELATED_TO") return true;
+	const dependencyDir = relation === "PART_OF" ? (dir === "inbound" ? "outbound" : "inbound") : dir;
+	return dependencyDir === direction;
+}
+
+/**
+ * Bounded breadth-first search. "inbound" finds what depends on the start node (what could
+ * break if it changes); "outbound" finds what it depends on. Each node is
  * reached once, by its shortest path, so cycles end the walk. Reachability is potential
  * impact, never proof of it.
  */
@@ -57,7 +68,7 @@ export async function impact(
 			for (const dir of ["outbound", "inbound"] as const) {
 				for (const edge of await fetchEdges(batch, dir)) {
 					const free = edge.relation === "PUBLISHES_AS";
-					if (direction !== "both" && dir !== direction && !free) continue;
+					if (direction !== "both" && !free && !follows(edge.relation, dir, direction)) continue;
 					const from = dir === "outbound" ? edge.sourceNodeId : edge.targetNodeId;
 					const to = dir === "outbound" ? edge.targetNodeId : edge.sourceNodeId;
 					const parent = reached.get(from);

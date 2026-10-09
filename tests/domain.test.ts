@@ -73,7 +73,8 @@ describe("impact", () => {
 		lastSeenAt: "",
 		schemaVersion: 1,
 	});
-	// A links to B's URL; B links to A's URL (a cycle); C links to B; a form on B is inferred to feed a CRM.
+	// A links to B's URL; B links to A's URL (a cycle); C links to B; a form is part of page B
+	// and is guessed to feed a CRM.
 	const graph = [
 		e("A", "PUBLISHES_AS", "uA"),
 		e("B", "PUBLISHES_AS", "uB"),
@@ -92,10 +93,17 @@ describe("impact", () => {
 	it("reaches pages linking to an entry without spending a hop on its URL, and stops at cycles", async () => {
 		const result = await impact("B", "inbound", 1, fetch);
 		const byId = new Map(result.hits.map((h) => [h.nodeId, h]));
-		expect([...byId.keys()].sort()).toEqual(["A", "C", "form", "uB"]);
+		expect([...byId.keys()].sort()).toEqual(["A", "C", "uB"]);
 		expect(byId.get("A")?.depth).toBe(1);
 		expect(byId.get("A")?.path.map((p) => p.relation)).toEqual(["PUBLISHES_AS", "LINKS_TO"]);
 		expect(result.truncated).toBe(false);
+	});
+
+	it("treats PART_OF as the whole depending on its part", async () => {
+		const fromCrm = await impact("crm", "inbound", 3, fetch);
+		expect(fromCrm.hits.map((h) => h.nodeId)).toEqual(expect.arrayContaining(["form", "B", "A", "C"]));
+		const fromB = await impact("B", "outbound", 1, fetch);
+		expect(fromB.hits.map((h) => h.nodeId)).toContain("form");
 	});
 
 	it("respects depth, clamps it to 3, and keeps inferred paths unconfirmed", async () => {

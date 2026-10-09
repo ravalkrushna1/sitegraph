@@ -136,7 +136,10 @@ export const routes = {
 				activeEdges(ctx, [ctx.input.nodeId], "outbound"),
 				activeEdges(ctx, [ctx.input.nodeId], "inbound"),
 			]);
-			const all = [...outbound, ...inbound];
+			// An entry and its URL are one page: also show what links to the entry's URL.
+			const ownUrls = outbound.filter((e) => e.relation === "PUBLISHES_AS").map((e) => e.targetNodeId);
+			const linkers = ownUrls.length ? await activeEdges(ctx, ownUrls, "inbound") : [];
+			const all = [...new Map([...outbound, ...inbound, ...linkers].map((e) => [e.id, e])).values()];
 			const edges = all.slice(0, NEIGHBOUR_CAP);
 			const nodes = await nodesById(ctx, edges.flatMap((e) => [e.sourceNodeId, e.targetNodeId]));
 			return {
