@@ -209,7 +209,7 @@ export async function startScan(ctx: PluginContext): Promise<ScanState> {
 	const running = await ctx.kv.get<ScanState>(SCAN_KEY);
 	if (running && Date.now() - Date.parse(running.startedAt) < STALE_LOCK_MS) return running;
 	const state: ScanState = {
-		id: `scan_${Date.now().toString(36)}`,
+		id: `scan_${crypto.randomUUID()}`,
 		startedAt: new Date().toISOString(),
 		phase: "collect",
 		collections: await collectionPlans(ctx),
