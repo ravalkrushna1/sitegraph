@@ -1,7 +1,8 @@
 // Discovery: turns published EmDash entries into CONTENT/URL nodes and PUBLISHES_AS/LINKS_TO edges.
 // Read-only towards content (SPEC D3). Rescans are idempotent thanks to deterministic IDs.
 
-import type { CollectionSchemaInfo, PluginContext, StorageCollection } from "emdash";
+import type { CollectionSchemaInfo, PluginContext } from "emdash";
+import { PluginRouteError } from "emdash";
 
 import {
 	contentNodeId,
@@ -11,14 +12,15 @@ import {
 	SCHEMA_VERSION,
 	urlNodeId,
 } from "./domain/graph.js";
-import { entryPath, extractLinks, internalPath } from "./domain/links.js";
-import { edgesOf, nodesOf, queryAll } from "./store.js";
+import { entryPath, entryPathMatcher, extractLinks, internalPath } from "./domain/links.js";
+import { activeEdges, edgesOf, nodesOf, queryAll } from "./store.js";
 
 /** The slice of a plugin-visible content item that discovery reads. */
 interface Entry {
 	id: string;
 	slug: string | null;
 	status: string;
+	locale?: string | null;
 	data: Record<string, unknown>;
 }
 
@@ -34,7 +36,9 @@ export interface CollectionPlan {
 export interface ScanState {
 	id: string;
 	startedAt: string;
-	phase: "collect" | "reconcile-nodes" | "reconcile-edges";
+	/** Heartbeat: a scan nobody has advanced for a while can be replaced. */
+	updatedAt: string;
+	phase: "collect" | "reconcile-edges" | "reconcile-nodes";
 	collections: CollectionPlan[];
 	index: number;
 	cursor?: string;
@@ -56,8 +60,10 @@ export interface LastScan {
 const SCAN_KEY = "scan";
 const LAST_SCAN_KEY = "lastScan";
 const BATCH = 25;
-const STALE_LOCK_MS = 10 * 60 * 1000;
+const STALE_AFTER_MS = 2 * 60 * 1000;
 const MAX_ERRORS = 20;
+
+const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
 export async function collectionPlans(ctx: PluginContext): Promise<CollectionPlan[]> {
 	const collections: CollectionSchemaInfo[] = (await ctx.schema?.listCollections()) ?? [];
@@ -71,6 +77,17 @@ export async function collectionPlans(ctx: PluginContext): Promise<CollectionPla
 	}));
 }
 
+/**
+ * Could an entry live at this path? Yes when it fits a routable collection's URL pattern and
+ * doesn't look like a file. A link to such a path with no entry behind it is broken; a link
+ * to anything else (home page, listings, feeds) points at a page we simply don't map.
+ */
+export function looksLikeEntryPath(path: string, plans: CollectionPlan[]): boolean {
+	const last = path.slice(path.lastIndexOf("/") + 1);
+	if (last.includes(".")) return false;
+	return plans.some((p) => p.routable && entryPathMatcher(p.pattern, p.slug)?.test(path));
+}
+
 function entryLabel(item: Entry, plan: CollectionPlan): string {
 	const title = plan.titleField ? item.data[plan.titleField] : item.data.title;
 	if (typeof title === "string" && title.trim()) return title.trim().slice(0, 200);
@@ -79,7 +96,7 @@ function entryLabel(item: Entry, plan: CollectionPlan): string {
 
 /** A discovered node merged over what's stored, so human annotations and firstSeenAt survive. */
 function discoveredNode(
-	existing: Omit<GraphNode, never> | undefined,
+	existing: GraphNode | undefined,
 	fresh: Pick<GraphNode, "type" | "label" | "ref"> & Partial<GraphNode>,
 	now: string,
 	scanId: string,
@@ -98,22 +115,50 @@ function discoveredNode(
 }
 
 /**
+ * Recompute a URL node's status from the edges that point at it, the single source of truth:
+ * a published entry there → resolved; otherwise broken if it looks like an entry path, or
+ * unknown if not; and with nothing pointing at it at all, it leaves the map.
+ */
+export async function settleUrl(ctx: PluginContext, plans: CollectionPlan[], nodeId: string): Promise<boolean> {
+	const nodes = nodesOf(ctx);
+	const node = await nodes.get(nodeId);
+	if (!node || node.type !== "URL" || node.provenance !== "DISCOVERED") return false;
+	const inbound = await activeEdges(ctx, [nodeId], "inbound", 50);
+	const hasPage = inbound.some((e) => e.relation === "PUBLISHES_AS");
+	const next = { ...node };
+	if (!hasPage && inbound.length === 0) next.active = false;
+	else if (hasPage) next.resolved = true;
+	else if (looksLikeEntryPath(node.ref, plans)) next.resolved = false;
+	else delete next.resolved;
+	if (next.active === node.active && next.resolved === node.resolved) return false;
+	await nodes.put(nodeId, next);
+	return true;
+}
+
+/**
  * Re-read one entry's graph: its CONTENT node, its URL, and its outgoing links. Outgoing
  * discovered edges it no longer has are retired; that's safe because the entry was read whole.
+ * `settle` recomputes the touched URLs right away (hooks); a full scan settles them at the end.
  */
 export async function refreshEntry(
 	ctx: PluginContext,
+	plans: CollectionPlan[],
 	plan: CollectionPlan,
 	item: Entry,
 	scanId: string,
+	settle: boolean,
 ): Promise<void> {
-	if (item.status !== "published") return retireEntry(ctx, plan.slug, item.id);
+	if (item.status !== "published") return retireEntry(ctx, plans, plan.slug, item.id);
 
 	const now = new Date().toISOString();
 	const nodes = nodesOf(ctx);
 	const edges = edgesOf(ctx);
 	const contentId = contentNodeId(plan.slug, item.id);
-	const path = plan.routable && item.slug ? entryPath(plan.pattern, plan.slug, item.slug, item.id) : null;
+	// Translations are mapped as entries without a URL: we don't reproduce EmDash's locale
+	// prefixes, and guessing would collide translations onto one path (see README limits).
+	const isDefaultLocale = !item.locale || item.locale === ctx.site.locale;
+	const path =
+		plan.routable && item.slug && isDefaultLocale ? entryPath(plan.pattern, plan.slug, item.slug, item.id) : null;
 
 	const links = extractLinks(item.data, plan.urlFields).flatMap((link) => {
 		const target = internalPath(link.href, path ?? "/", ctx.site.url);
@@ -134,15 +179,18 @@ export async function refreshEntry(
 	for (const link of links) {
 		const id = urlNodeId(link.target);
 		if (nodeDocs.has(id)) continue;
-		// Whether a page lives here is decided by whichever entry publishes as it.
 		const prior = existing.get(id);
-		nodeDocs.set(id, discoveredNode(prior, { type: "URL", label: link.target, ref: link.target, resolved: prior?.resolved ?? false }, now, scanId));
+		// A first guess for brand-new URLs; settleUrl has the final word.
+		const resolved = prior?.active ? prior.resolved : looksLikeEntryPath(link.target, plans) ? false : undefined;
+		const doc = discoveredNode(prior, { type: "URL", label: link.target, ref: link.target }, now, scanId);
+		if (resolved === undefined) delete doc.resolved;
+		else doc.resolved = resolved;
+		nodeDocs.set(id, doc);
 	}
 
 	const edgeDocs = new Map<string, GraphEdge>();
 	const edge = (source: string, relation: GraphEdge["relation"], target: string, field: string, evidence: GraphEdge["evidence"]) => {
-		const id = edgeId(source, relation, target, field);
-		edgeDocs.set(id, {
+		edgeDocs.set(edgeId(source, relation, target, field), {
 			sourceNodeId: source,
 			targetNodeId: target,
 			relation,
@@ -171,31 +219,39 @@ export async function refreshEntry(
 		...[...edgeDocs].map(([id, data]) => ({ id, data })),
 		...stale.map((p) => ({ id: p.id, data: { ...p.data, active: false } })),
 	]);
+
+	if (settle) {
+		// A renamed slug or a removed link changes the status of the URLs left behind.
+		const touched = new Set([...stale.map((e) => e.data.targetNodeId), ...links.map((l) => urlNodeId(l.target))]);
+		for (const id of touched) await settleUrl(ctx, plans, id);
+	}
 }
 
-/** An entry left the published site: hide its node and links, mark its URL as having no page. */
-export async function retireEntry(ctx: PluginContext, collection: string, entryId: string): Promise<void> {
+/** An entry left the published site: hide its node and links, then re-settle the URLs it touched. */
+export async function retireEntry(ctx: PluginContext, plans: CollectionPlan[], collection: string, entryId: string): Promise<void> {
 	const nodes = nodesOf(ctx);
 	const edges = edgesOf(ctx);
 	const contentId = contentNodeId(collection, entryId);
 	const outgoing = (await queryAll(edges, { sourceNodeId: contentId, provenance: "DISCOVERED" })).filter((e) => e.data.active);
-	const urls = outgoing.filter((e) => e.data.relation === "PUBLISHES_AS").map((e) => e.data.targetNodeId);
-	const docs = await nodes.getMany([contentId, ...urls]);
-
 	await edges.putMany(outgoing.map((e) => ({ id: e.id, data: { ...e.data, active: false } })));
-	await nodes.putMany(
-		[...docs].map(([id, data]) => ({ id, data: id === contentId ? { ...data, active: false } : { ...data, resolved: false } })),
-	);
+	const content = await nodes.get(contentId);
+	if (content?.active) await nodes.put(contentId, { ...content, active: false });
+	for (const id of new Set(outgoing.map((e) => e.data.targetNodeId))) await settleUrl(ctx, plans, id);
 }
 
 /** Refresh one entry from a content hook. Never scans the site (SPEC D8). */
 export async function refreshFromHook(ctx: PluginContext, collection: string, entryId: string): Promise<void> {
-	const plan = (await collectionPlans(ctx)).find((p) => p.slug === collection);
+	const plans = await collectionPlans(ctx);
+	const plan = plans.find((p) => p.slug === collection);
 	if (!plan) return;
 	const item = await ctx.content?.get(collection, entryId);
+	if (!item) return retireEntry(ctx, plans, collection, entryId);
 	const running = await ctx.kv.get<ScanState>(SCAN_KEY);
-	if (!item) return retireEntry(ctx, collection, entryId);
-	await refreshEntry(ctx, plan, item, running?.id ?? "hook");
+	await refreshEntry(ctx, plans, plan, item, running?.id ?? "hook", true);
+}
+
+export async function retireFromHook(ctx: PluginContext, collection: string, entryId: string): Promise<void> {
+	await retireEntry(ctx, await collectionPlans(ctx), collection, entryId);
 }
 
 export async function getScanStatus(ctx: PluginContext): Promise<{ running: ScanState | null; last: LastScan | null }> {
@@ -205,12 +261,15 @@ export async function getScanStatus(ctx: PluginContext): Promise<{ running: Scan
 	};
 }
 
+/** Start a scan, or join the one in progress (two admins clicking at once share it). */
 export async function startScan(ctx: PluginContext): Promise<ScanState> {
 	const running = await ctx.kv.get<ScanState>(SCAN_KEY);
-	if (running && Date.now() - Date.parse(running.startedAt) < STALE_LOCK_MS) return running;
+	if (running && Date.now() - Date.parse(running.updatedAt ?? running.startedAt) < STALE_AFTER_MS) return running;
+	const now = new Date().toISOString();
 	const state: ScanState = {
 		id: `scan_${crypto.randomUUID()}`,
-		startedAt: new Date().toISOString(),
+		startedAt: now,
+		updatedAt: now,
 		phase: "collect",
 		collections: await collectionPlans(ctx),
 		index: 0,
@@ -223,76 +282,98 @@ export async function startScan(ctx: PluginContext): Promise<ScanState> {
 }
 
 /**
- * Advance the running scan by one bounded batch. The admin calls this until `done`, so no
- * single request runs long. Reconciliation runs only after every collection was read, so a
- * failed or abandoned scan never retires anything (SPEC D7).
+ * Advance scan `scanId` by one bounded batch. The admin calls this until `done`, so no single
+ * request runs long. Reconciliation runs only after every collection was read cleanly, so a
+ * failed or abandoned scan never retires anything (SPEC D7). Writes are compare-and-set: if
+ * another tab advanced the scan meanwhile, this step's state is dropped instead of rolling
+ * theirs back (the work it did is idempotent).
  */
-export async function scanStep(ctx: PluginContext): Promise<{ state: ScanState | null; last: LastScan | null; done: boolean }> {
-	const state = await ctx.kv.get<ScanState>(SCAN_KEY);
+export async function scanStep(
+	ctx: PluginContext,
+	scanId: string,
+): Promise<{ state: ScanState | null; last: LastScan | null; done: boolean }> {
+	const versioned = await ctx.kv.getVersioned<ScanState>(SCAN_KEY);
+	const state = versioned?.value;
 	if (!state) return { state: null, last: await ctx.kv.get<LastScan>(LAST_SCAN_KEY), done: true };
+	if (state.id !== scanId) throw PluginRouteError.conflict("A newer scan replaced this one. Reload to follow it.");
+	const plans = state.collections;
 
 	if (state.phase === "collect") {
-		const plan = state.collections[state.index];
+		const plan = plans[state.index];
 		if (!plan) {
-			state.phase = "reconcile-nodes";
+			state.phase = "reconcile-edges";
 			state.cursor = undefined;
 		} else {
-			const page = await ctx.content!.list(plan.slug, { limit: BATCH, cursor: state.cursor, where: { status: "published" } });
-			for (const item of page.items) {
-				try {
-					await refreshEntry(ctx, plan, item, state.id);
-					state.processed++;
-				} catch (error) {
-					if (state.errors.length < MAX_ERRORS) state.errors.push(`${plan.slug}/${item.id}: ${error instanceof Error ? error.message : String(error)}`);
+			try {
+				const page = await ctx.content!.list(plan.slug, { limit: BATCH, cursor: state.cursor, where: { status: "published" } });
+				for (const item of page.items) {
+					try {
+						await refreshEntry(ctx, plans, plan, item, state.id, false);
+						state.processed++;
+					} catch (error) {
+						if (state.errors.length < MAX_ERRORS) state.errors.push(`${plan.slug}/${item.id}: ${errorText(error)}`);
+					}
 				}
-			}
-			if (page.hasMore && page.cursor) state.cursor = page.cursor;
-			else {
+				if (page.hasMore && page.cursor) state.cursor = page.cursor;
+				else {
+					state.index++;
+					state.cursor = undefined;
+				}
+			} catch (error) {
+				// The whole collection couldn't be listed (e.g. deleted mid-scan): note it and move on.
+				if (state.errors.length < MAX_ERRORS) state.errors.push(`${plan.slug}: ${errorText(error)}`);
 				state.index++;
 				state.cursor = undefined;
 			}
 		}
-	} else {
-		// Retire discovered records this scan didn't see. Skipped when entries failed,
-		// because their links weren't seen either and would be wrongly retired.
-		const page = state.errors.length
-			? { items: [], hasMore: false, cursor: undefined }
-			: state.phase === "reconcile-nodes"
-				? await retireUnseen(nodesOf(ctx), state)
-				: await retireUnseen(edgesOf(ctx), state);
-		if (page.hasMore && page.cursor) state.cursor = page.cursor;
-		else if (state.phase === "reconcile-nodes") {
-			state.phase = "reconcile-edges";
-			state.cursor = undefined;
-		} else {
-			const last: LastScan = {
-				id: state.id,
-				startedAt: state.startedAt,
-				finishedAt: new Date().toISOString(),
-				status: state.errors.length ? "PARTIAL" : "SUCCEEDED",
-				processed: state.processed,
-				retired: state.retired,
-				errors: state.errors,
-			};
-			await ctx.kv.set(LAST_SCAN_KEY, last);
-			await ctx.kv.delete(SCAN_KEY);
-			return { state: null, last, done: true };
+	} else if (state.errors.length) {
+		// Failed entries' links weren't seen, so reconciling would wrongly retire them.
+		return finish(ctx, state);
+	} else if (state.phase === "reconcile-edges") {
+		const page = await edgesOf(ctx).query({ where: { provenance: "DISCOVERED" }, limit: 100, cursor: state.cursor });
+		const stale = page.items.filter((row) => row.data.active && row.data.scanId !== state.id);
+		if (stale.length) {
+			await edgesOf(ctx).putMany(stale.map((row) => ({ id: row.id, data: { ...row.data, active: false } })));
+			state.retired += stale.length;
 		}
+		if (page.hasMore && page.cursor) state.cursor = page.cursor;
+		else {
+			state.phase = "reconcile-nodes";
+			state.cursor = undefined;
+		}
+	} else {
+		// Entries this scan didn't see are gone; every URL is re-settled from its now-current edges.
+		const page = await nodesOf(ctx).query({ where: { provenance: "DISCOVERED" }, limit: 50, cursor: state.cursor });
+		for (const row of page.items) {
+			if (!row.data.active) continue;
+			if (row.data.type === "URL") {
+				if ((await settleUrl(ctx, plans, row.id)) && !(await nodesOf(ctx).get(row.id))?.active) state.retired++;
+			} else if ((row.data as { scanId?: string }).scanId !== state.id) {
+				await nodesOf(ctx).put(row.id, { ...row.data, active: false });
+				state.retired++;
+			}
+		}
+		if (page.hasMore && page.cursor) state.cursor = page.cursor;
+		else return finish(ctx, state);
 	}
 
-	await ctx.kv.set(SCAN_KEY, state);
-	return { state, last: await ctx.kv.get<LastScan>(LAST_SCAN_KEY), done: false };
+	state.updatedAt = new Date().toISOString();
+	const write = await ctx.kv.compareAndSet(SCAN_KEY, versioned!.revision, state);
+	const current = write.applied ? state : await ctx.kv.get<ScanState>(SCAN_KEY);
+	return { state: current, last: await ctx.kv.get<LastScan>(LAST_SCAN_KEY), done: !current };
 }
 
-async function retireUnseen<T extends { active: boolean; scanId?: string }>(
-	collection: StorageCollection<T>,
-	state: ScanState,
-): Promise<{ hasMore: boolean; cursor?: string }> {
-	const page = await collection.query({ where: { provenance: "DISCOVERED" }, limit: 100, cursor: state.cursor });
-	const stale = page.items.filter((row) => row.data.active && row.data.scanId !== state.id);
-	if (stale.length) {
-		await collection.putMany(stale.map((row) => ({ id: row.id, data: { ...row.data, active: false } })));
-		state.retired += stale.length;
-	}
-	return page;
+async function finish(ctx: PluginContext, state: ScanState) {
+	const last: LastScan = {
+		id: state.id,
+		startedAt: state.startedAt,
+		finishedAt: new Date().toISOString(),
+		status: state.errors.length ? "PARTIAL" : "SUCCEEDED",
+		processed: state.processed,
+		retired: state.retired,
+		errors: state.errors,
+	};
+	await ctx.kv.set(LAST_SCAN_KEY, last);
+	await ctx.kv.delete(SCAN_KEY);
+	return { state: null, last, done: true };
 }

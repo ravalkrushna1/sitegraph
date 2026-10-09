@@ -46,8 +46,9 @@ export function extractLinks(
 
 /**
  * Turn an href into the site-relative path that identifies a page, or null when the
- * link is external, unsafe or not a page link. Fragments are dropped; the query is
- * kept; trailing slashes are ignored so "/a/" and "/a" are the same page.
+ * link is external, unsafe or not a page link. Fragments and query strings are dropped
+ * (`/pricing?plan=pro` is the pricing page; the raw href stays in the edge evidence) and
+ * trailing slashes are ignored so "/a/" and "/a" are the same page.
  */
 export function internalPath(href: string, sourcePath: string, siteUrl: string): string | null {
 	if (UNSAFE_SCHEME.test(href) || href.trim().startsWith("#")) return null;
@@ -64,7 +65,7 @@ export function internalPath(href: string, sourcePath: string, siteUrl: string):
 	if (url.origin !== origin) return null;
 	let path = url.pathname.replace(/\/{2,}/g, "/");
 	if (path.length > 1 && path.endsWith("/")) path = path.slice(0, -1);
-	return path + url.search;
+	return path;
 }
 
 /**
@@ -85,4 +86,22 @@ export function entryPath(
 	if (!path.startsWith("/")) path = `/${path}`;
 	if (path.length > 1 && path.endsWith("/")) path = path.slice(0, -1);
 	return path;
+}
+
+/**
+ * A matcher for paths an entry of this collection could live at, or null when the pattern
+ * uses tokens we don't resolve. Used to tell a broken link (looks like an entry, none is
+ * there) from a link to some other page of the site (home, listings, feeds).
+ */
+export function entryPathMatcher(pattern: string | null, collection: string): RegExp | null {
+	let base = pattern ?? `/${encodeURIComponent(collection)}/{slug}`;
+	if (/\{(?!slug\}|id\})[^}]*\}/.test(base)) return null;
+	base = base.replace(/\/{2,}/g, "/");
+	if (!base.startsWith("/")) base = `/${base}`;
+	if (base.length > 1 && base.endsWith("/")) base = base.slice(0, -1);
+	const source = base
+		.split(/(\{slug\}|\{id\})/)
+		.map((part) => (part === "{slug}" || part === "{id}" ? "[^/]+" : part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")))
+		.join("");
+	return new RegExp(`^${source}$`);
 }

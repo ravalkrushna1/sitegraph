@@ -69,7 +69,8 @@ async function call<T>(route: string, body?: unknown): Promise<T> {
 export const api = {
 	overview: () => call<Overview>("overview"),
 	startScan: () => call<{ state: ScanState }>("scan/start"),
-	scanStep: () => call<{ state: ScanState | null; last: LastScan | null; done: boolean }>("scan/step"),
+	scanStep: (scanId: string) =>
+		call<{ state: ScanState | null; last: LastScan | null; done: boolean }>("scan/step", { scanId }),
 	search: (q: string, opts: { type?: NodeType; broken?: boolean } = {}) =>
 		call<{ items: Node[]; cursor: string | null }>("nodes/search", { q, ...opts }),
 	neighborhood: (nodeId: string) => call<Neighborhood>("graph/neighborhood", { nodeId }),

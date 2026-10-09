@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { EdgeRecord } from "../src/domain/impact.js";
 import { impact } from "../src/domain/impact.js";
-import { entryPath, extractLinks, internalPath } from "../src/domain/links.js";
+import { entryPath, entryPathMatcher, extractLinks, internalPath } from "../src/domain/links.js";
 
 const SITE = "https://example.com";
 
@@ -11,7 +11,7 @@ describe("internalPath", () => {
 		expect(internalPath("/posts/a/", "/", SITE)).toBe("/posts/a");
 		expect(internalPath("b", "/posts/a", SITE)).toBe("/posts/b");
 		expect(internalPath("https://EXAMPLE.com:443/x#top", "/", SITE)).toBe("/x");
-		expect(internalPath("/search?q=1", "/", SITE)).toBe("/search?q=1");
+		expect(internalPath("/pricing?plan=pro", "/", SITE)).toBe("/pricing");
 		expect(internalPath("//double//slash/", "/", SITE)).toBeNull(); // protocol-relative to another host
 	});
 
@@ -58,6 +58,17 @@ describe("entryPath", () => {
 		expect(entryPath(null, "pages", "about", "1")).toBe("/pages/about");
 		expect(entryPath("/{slug}/", "pages", "about", "1")).toBe("/about");
 		expect(entryPath("/blog/{year}/{slug}", "posts", "a", "1")).toBeNull();
+	});
+});
+
+describe("entryPathMatcher", () => {
+	it("matches only paths an entry of the collection could live at", () => {
+		const posts = entryPathMatcher("/posts/{slug}", "posts")!;
+		expect(posts.test("/posts/hello")).toBe(true);
+		expect(posts.test("/posts")).toBe(false);
+		expect(posts.test("/posts/a/b")).toBe(false);
+		expect(entryPathMatcher("/blog/{year}/{slug}", "posts")).toBeNull();
+		expect(entryPathMatcher("/x.y/{slug}", "c")!.test("/xzy/a")).toBe(false);
 	});
 });
 

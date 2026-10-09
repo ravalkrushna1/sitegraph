@@ -7,7 +7,8 @@ something: **what else depends on this?**
 
 - **Graph explorer.** Search any entry, URL, form or service and expand outward from it.
   A table view shows the same connections for keyboard and screen-reader users.
-- **Broken internal links.** A link to a path where no published entry lives is flagged.
+- **Broken internal links.** A link to an entry path where no published entry lives is
+  flagged, including links left behind when a page's slug changes.
 - **Change impact.** Up to 3 steps out, with the exact path for each result, split into
   confirmed connections and ones that rely on a guess.
 - **Your own notes.** Purpose, criticality, maintenance notes, a runbook link and a
@@ -68,8 +69,11 @@ fetched), and stores its graph in its own plugin storage. Viewing the graph need
 
 - Links are found in rich text and `url` fields. **Reference fields aren't mapped yet**,
   because EmDash doesn't expose them to plugins.
-- Collections whose URL pattern uses date or locale tokens are mapped as entries, but
-  without a URL.
+- Collections whose URL pattern uses date or locale tokens, and entries in a non-default
+  language, are mapped as entries but without a URL.
+- A link is "broken" only when it points where an entry could live (it fits a collection's
+  URL pattern) and none does. Links to your home page, listing pages or files are shown,
+  never flagged.
 - Search matches from the start of a name or path ("pric" finds "Pricing", "ing" doesn't).
 - The graph shows a neighbourhood at a time, not the whole site, so large sites stay usable.
 

@@ -91,22 +91,45 @@ export function Explorer() {
 		}
 	}, []);
 
-	/** Re-read every expanded neighbourhood after an edit, keeping where things were drawn. */
-	const refresh = React.useCallback(async () => {
+	// Latest graph for async callbacks, so a scan that finishes later doesn't act on a stale copy.
+	const graphRef = React.useRef(graph);
+	graphRef.current = graph;
+
+	/** After a scan: re-read every expanded neighbourhood, keeping where things were drawn. */
+	const refreshAll = React.useCallback(async () => {
 		reload();
-		const ids = [...graph.expanded];
-		try {
-			const hoods = await Promise.all(ids.map((id) => api.neighborhood(id).catch(() => null)));
-			let next: Graph = { ...EMPTY, pos: graph.pos };
-			hoods.forEach((hood, i) => {
-				if (hood) next = merge(next, ids[i]!, [hood.center, ...hood.nodes], hood.edges);
-			});
-			setGraph(next);
-			if (selectedId && !next.nodes.has(selectedId)) setSelectedId(null);
-		} catch (e) {
-			setError(message(e));
-		}
-	}, [graph, reload, selectedId]);
+		const current = graphRef.current;
+		const ids = [...current.expanded];
+		const hoods = await Promise.all(ids.map((id) => api.neighborhood(id).catch(() => null)));
+		let next: Graph = { ...EMPTY, pos: current.pos };
+		hoods.forEach((hood, i) => {
+			if (hood) next = merge(next, ids[i]!, [hood.center, ...hood.nodes], hood.edges);
+		});
+		setGraph(next);
+		setSelectedId((sel) => (sel && next.nodes.has(sel) ? sel : null));
+	}, [reload]);
+
+	/** After an edit to one node: refresh just that node and its connections; drop it if deleted. */
+	const refreshNode = React.useCallback(
+		async (id: string) => {
+			reload();
+			try {
+				const hood = await api.neighborhood(id);
+				setGraph((g) => {
+					const edges = new Map([...g.edges].filter(([, e]) => e.sourceNodeId !== id && e.targetNodeId !== id));
+					return merge({ ...g, edges }, id, [hood.center, ...hood.nodes], hood.edges);
+				});
+			} catch {
+				setGraph((g) => ({
+					...g,
+					nodes: new Map([...g.nodes].filter(([nodeId]) => nodeId !== id)),
+					edges: new Map([...g.edges].filter(([, e]) => e.sourceNodeId !== id && e.targetNodeId !== id)),
+				}));
+				setSelectedId((sel) => (sel === id ? null : sel));
+			}
+		},
+		[reload],
+	);
 
 	const showImpact = React.useCallback((impact: Impact) => {
 		const depthOf = new Map(impact.hits.map((h) => [h.nodeId, h.depth]));
@@ -147,7 +170,7 @@ export function Explorer() {
 					<h1>SiteGraph</h1>
 					<p className="sg-muted">How your pages, links and the services behind them depend on each other.</p>
 				</div>
-				<ScanButton overview={overview} onDone={() => void refresh()}>
+				<ScanButton overview={overview} onDone={() => void refreshAll()}>
 					<ExportButton disabled={!hasData} />
 				</ScanButton>
 			</header>
@@ -211,7 +234,7 @@ export function Explorer() {
 							edges={edges}
 							lookup={(id) => graph.nodes.get(id)}
 							siteUrl={overview?.siteUrl ?? null}
-							onChanged={() => void refresh()}
+							onChanged={() => void refreshNode(selected.id)}
 							onFocus={(id) => (graph.nodes.has(id) ? setSelectedId(id) : void focus(id))}
 							onShowImpact={showImpact}
 						/>
@@ -312,9 +335,9 @@ function ScanButton({ overview, onDone, children }: { overview?: Overview; onDon
 		setFinished(undefined);
 		setProgress("Starting scan…");
 		try {
-			await api.startScan();
+			const { state } = await api.startScan();
 			for (;;) {
-				const step = await api.scanStep();
+				const step = await api.scanStep(state.id);
 				if (step.done) {
 					if (step.last) setFinished(step.last);
 					break;

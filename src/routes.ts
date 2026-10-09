@@ -12,7 +12,7 @@ import {
 	NODE_TYPES,
 	SCHEMA_VERSION,
 } from "./domain/graph.js";
-import { impact, MAX_DEPTH } from "./domain/impact.js";
+import { impact, MAX_DEPTH, MAX_EDGES } from "./domain/impact.js";
 import { getScanStatus, scanStep, startScan } from "./scan.js";
 import { activeEdges, edgesOf, nodesOf, queryAll } from "./store.js";
 
@@ -103,7 +103,8 @@ export const routes = {
 
 	"scan/step": {
 		permission: MANAGE,
-		handler: async (ctx: Ctx) => scanStep(ctx),
+		input: z.object({ scanId: z.string().min(1).max(100) }),
+		handler: async (ctx: Ctx<{ scanId: string }>) => scanStep(ctx, ctx.input.scanId),
 	},
 
 	"nodes/search": {
@@ -132,13 +133,14 @@ export const routes = {
 		input: z.object({ nodeId: id }),
 		handler: async (ctx: Ctx<{ nodeId: string }>) => {
 			const center = await requireNode(ctx, ctx.input.nodeId);
+			const cap = NEIGHBOUR_CAP + 1;
 			const [outbound, inbound] = await Promise.all([
-				activeEdges(ctx, [ctx.input.nodeId], "outbound"),
-				activeEdges(ctx, [ctx.input.nodeId], "inbound"),
+				activeEdges(ctx, [ctx.input.nodeId], "outbound", cap),
+				activeEdges(ctx, [ctx.input.nodeId], "inbound", cap),
 			]);
 			// An entry and its URL are one page: also show what links to the entry's URL.
 			const ownUrls = outbound.filter((e) => e.relation === "PUBLISHES_AS").map((e) => e.targetNodeId);
-			const linkers = ownUrls.length ? await activeEdges(ctx, ownUrls, "inbound") : [];
+			const linkers = ownUrls.length ? await activeEdges(ctx, ownUrls, "inbound", cap) : [];
 			const all = [...new Map([...outbound, ...inbound, ...linkers].map((e) => [e.id, e])).values()];
 			const edges = all.slice(0, NEIGHBOUR_CAP);
 			const nodes = await nodesById(ctx, edges.flatMap((e) => [e.sourceNodeId, e.targetNodeId]));
@@ -162,7 +164,7 @@ export const routes = {
 		handler: async (ctx: Ctx<{ nodeId: string; direction: "inbound" | "outbound" | "both"; depth: number }>) => {
 			await requireNode(ctx, ctx.input.nodeId);
 			const result = await impact(ctx.input.nodeId, ctx.input.direction, ctx.input.depth, (ids, dir) =>
-				activeEdges(ctx, ids, dir),
+				activeEdges(ctx, ids, dir, MAX_EDGES),
 			);
 			const nodes = await nodesById(ctx, [result.start, ...result.hits.map((h) => h.nodeId)]);
 			return { ...result, nodes };

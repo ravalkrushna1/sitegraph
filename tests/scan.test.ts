@@ -40,30 +40,40 @@ interface Item {
 	id: string;
 	slug: string;
 	status: string;
+	locale?: string;
 	data: Row;
 }
 
-function fakeCtx(entries: Item[]) {
-	const kv = new Map<string, unknown>();
+const POSTS = { slug: "posts", label: "Posts", labelSingular: "Post", urlPattern: "/posts/{slug}", routable: true, titleField: "title", fields: [] };
+
+function fakeCtx(entries: Item[], collections: unknown[] = [POSTS]) {
+	const kv = new Map<string, { value: unknown; revision: string }>();
+	let rev = 0;
 	const nodes = fakeCollection();
 	const edges = fakeCollection();
 	const ctx = {
 		plugin: { id: "sitegraph", version: "test" },
 		site: { url: "https://example.com", name: "Test", locale: "en" },
+		log: { info() {}, warn() {}, error() {} },
 		storage: { nodes, edges },
 		kv: {
-			get: async (k: string) => structuredClone(kv.get(k)) ?? null,
-			set: async (k: string, v: unknown) => void kv.set(k, structuredClone(v)),
+			get: async (k: string) => structuredClone(kv.get(k)?.value) ?? null,
+			set: async (k: string, v: unknown) => void kv.set(k, { value: structuredClone(v), revision: String(++rev) }),
 			delete: async (k: string) => kv.delete(k),
+			getVersioned: async (k: string) => (kv.has(k) ? structuredClone(kv.get(k)) : null),
+			compareAndSet: async (k: string, expected: string | null, v: unknown) => {
+				if ((kv.get(k)?.revision ?? null) !== expected) return { applied: false };
+				kv.set(k, { value: structuredClone(v), revision: String(++rev) });
+				return { applied: true, revision: String(rev) };
+			},
 		},
 		schema: {
-			listCollections: async () => [
-				{ slug: "posts", label: "Posts", labelSingular: "Post", urlPattern: "/posts/{slug}", routable: true, titleField: "title", fields: [] },
-			],
+			listCollections: async () => collections,
 		},
 		content: {
 			get: async (_c: string, id: string) => structuredClone(entries.find((e) => e.id === id)) ?? null,
-			list: async (_c: string, { limit = 50, cursor }: { limit?: number; cursor?: string }) => {
+			list: async (c: string, { limit = 50, cursor }: { limit?: number; cursor?: string }) => {
+				if (c === "ghost") throw new Error("Collection not found");
 				const published = entries.filter((e) => e.status === "published");
 				const start = cursor ? Number(cursor) : 0;
 				const hasMore = start + limit < published.length;
@@ -85,10 +95,13 @@ const post = (id: string, links: string[], status = "published"): Item => ({
 });
 
 async function fullScan(ctx: PluginContext) {
-	await startScan(ctx);
-	for (let i = 0; i < 100; i++) if ((await scanStep(ctx)).done) return;
+	const { id } = await startScan(ctx);
+	for (let i = 0; i < 100; i++) if ((await scanStep(ctx, id)).done) return;
 	throw new Error("scan never finished");
 }
+
+const broken = async (ctx: PluginContext) =>
+	((await call(routes.overview, ctx, undefined)) as { brokenLinks: number }).brokenLinks;
 
 const call = <T>(route: { handler: (ctx: never) => Promise<T> }, ctx: PluginContext, input: unknown) =>
 	route.handler({ ...ctx, input } as never);
@@ -155,5 +168,67 @@ describe("scan", () => {
 		expect(nodes.rows.get("content:posts:b")).toMatchObject({ active: true });
 		const { scan } = (await call(routes.overview, ctx, undefined)) as { scan: { last: { status: string } } };
 		expect(scan.last.status).toBe("PARTIAL");
+	});
+
+	it("keeps a renamed page's old URL broken while something still links to it, even if hooks were missed", async () => {
+		const { ctx, nodes } = fakeCtx(entries);
+		await fullScan(ctx);
+		expect(nodes.rows.get("url:/posts/b")).toMatchObject({ resolved: true });
+
+		// Hook path: B is renamed; A still links to /posts/b.
+		entries[1] = { ...entries[1]!, slug: "b2" };
+		await refreshFromHook(ctx, "posts", "b");
+		expect(nodes.rows.get("url:/posts/b")).toMatchObject({ resolved: false, active: true });
+		expect(await broken(ctx)).toBe(2);
+
+		// Missed-hook path: rename back with no hook; a full scan alone must repair both URLs.
+		entries[1] = { ...entries[1]!, slug: "b" };
+		await fullScan(ctx);
+		expect(nodes.rows.get("url:/posts/b")).toMatchObject({ resolved: true });
+		expect(nodes.rows.get("url:/posts/b2")).toMatchObject({ active: false });
+		expect(await broken(ctx)).toBe(1);
+	});
+
+	it("only calls a link broken when an entry could live there", async () => {
+		entries.push(post("c", ["/", "/rss.xml", "/posts/b?ref=nav", "/category/news", "/posts/ghost"]));
+		const { ctx, nodes } = fakeCtx(entries);
+		await fullScan(ctx);
+		expect(nodes.rows.get("url:/")).toMatchObject({ active: true });
+		expect(nodes.rows.get("url:/")?.resolved).toBeUndefined();
+		expect(nodes.rows.get("url:/rss.xml")?.resolved).toBeUndefined();
+		expect(nodes.rows.get("url:/category/news")?.resolved).toBeUndefined();
+		expect(nodes.rows.has("url:/posts/b?ref=nav")).toBe(false);
+		expect(nodes.rows.get("url:/posts/ghost")).toMatchObject({ resolved: false });
+		expect(await broken(ctx)).toBe(2); // /posts/missing and /posts/ghost
+	});
+
+	it("doesn't count a page nobody links to as broken when it's unpublished", async () => {
+		entries.push(post("lonely", []));
+		const { ctx, nodes } = fakeCtx(entries);
+		await fullScan(ctx);
+		entries[2] = { ...entries[2]!, status: "draft" };
+		await refreshFromHook(ctx, "posts", "lonely");
+		expect(nodes.rows.get("url:/posts/lonely")).toMatchObject({ active: false });
+		expect(nodes.rows.get("content:posts:lonely")).toMatchObject({ active: false });
+		expect(await broken(ctx)).toBe(1);
+	});
+
+	it("maps translations as entries without guessing their URL", async () => {
+		entries.push({ ...post("fr", []), locale: "fr", slug: "b" });
+		const { ctx, nodes, edges } = fakeCtx(entries);
+		await fullScan(ctx);
+		expect(nodes.rows.get("content:posts:fr")).toMatchObject({ active: true });
+		expect([...edges.rows.keys()].some((k) => k.startsWith("content:posts:fr|PUBLISHES_AS"))).toBe(false);
+		expect(nodes.rows.get("url:/posts/b")).toMatchObject({ resolved: true });
+	});
+
+	it("skips a collection that can't be listed, and refuses to advance a replaced scan", async () => {
+		const ghost = { ...POSTS, slug: "ghost" };
+		const { ctx } = fakeCtx(entries, [ghost, POSTS]);
+		const first = await startScan(ctx);
+		const { state } = await scanStep(ctx, first.id); // ghost fails; the scan moves on instead of sticking
+		expect(state?.index).toBe(1);
+		expect(state?.errors[0]).toContain("ghost");
+		await expect(scanStep(ctx, "scan_someone_else")).rejects.toThrow(/newer scan/);
 	});
 });

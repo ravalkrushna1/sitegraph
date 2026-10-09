@@ -2,7 +2,7 @@ import type { PluginDescriptor, ResolvedPlugin } from "emdash";
 import { definePlugin } from "emdash";
 
 import { routes } from "./routes.js";
-import { refreshFromHook, retireEntry } from "./scan.js";
+import { refreshFromHook, retireFromHook } from "./scan.js";
 import { STORAGE } from "./store.js";
 
 const ID = "sitegraph";
@@ -55,10 +55,10 @@ export function createPlugin(): ResolvedPlugin {
 			},
 			"content:afterUnpublish": async (event, ctx) => {
 				const id = entryId(event.content);
-				if (id) await retireEntry(ctx, event.collection, id);
+				if (id) await retireFromHook(ctx, event.collection, id);
 			},
 			"content:afterDelete": async (event, ctx) => {
-				await retireEntry(ctx, event.collection, event.id);
+				await retireFromHook(ctx, event.collection, event.id);
 			},
 		},
 		routes,
