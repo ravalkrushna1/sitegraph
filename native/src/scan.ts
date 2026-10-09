@@ -1,8 +1,9 @@
 // Discovery: turns published EmDash entries into CONTENT/URL nodes and PUBLISHES_AS/LINKS_TO edges.
 // Read-only towards content (SPEC D3). Rescans are idempotent thanks to deterministic IDs.
 
+// Shared by both editions (native/ and lite/): import only *types* from "emdash" here,
+// never runtime values, so the sandboxed bundle doesn't pull in the native API.
 import type { CollectionSchemaInfo, PluginContext } from "emdash";
-import { PluginRouteError } from "emdash";
 
 import {
 	contentNodeId,
@@ -62,6 +63,14 @@ const LAST_SCAN_KEY = "lastScan";
 const BATCH = 25;
 const STALE_AFTER_MS = 2 * 60 * 1000;
 const MAX_ERRORS = 20;
+
+/** A scan step was sent for a scan that has since been replaced. Each edition maps it to its own error. */
+export class ScanConflictError extends Error {
+	constructor() {
+		super("A newer scan replaced this one. Reload to follow it.");
+		this.name = "ScanConflictError";
+	}
+}
 
 const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
@@ -291,11 +300,12 @@ export async function startScan(ctx: PluginContext): Promise<ScanState> {
 export async function scanStep(
 	ctx: PluginContext,
 	scanId: string,
+	batch = BATCH,
 ): Promise<{ state: ScanState | null; last: LastScan | null; done: boolean }> {
 	const versioned = await ctx.kv.getVersioned<ScanState>(SCAN_KEY);
 	const state = versioned?.value;
 	if (!state) return { state: null, last: await ctx.kv.get<LastScan>(LAST_SCAN_KEY), done: true };
-	if (state.id !== scanId) throw PluginRouteError.conflict("A newer scan replaced this one. Reload to follow it.");
+	if (state.id !== scanId) throw new ScanConflictError();
 	const plans = state.collections;
 
 	if (state.phase === "collect") {
@@ -305,7 +315,7 @@ export async function scanStep(
 			state.cursor = undefined;
 		} else {
 			try {
-				const page = await ctx.content!.list(plan.slug, { limit: BATCH, cursor: state.cursor, where: { status: "published" } });
+				const page = await ctx.content!.list(plan.slug, { limit: batch, cursor: state.cursor, where: { status: "published" } });
 				for (const item of page.items) {
 					try {
 						await refreshEntry(ctx, plans, plan, item, state.id, false);
