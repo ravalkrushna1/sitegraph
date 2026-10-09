@@ -7,6 +7,7 @@ import {
 	type Edge,
 	type Impact,
 	isBroken,
+	type LastScan,
 	message,
 	type Node,
 	type Overview,
@@ -271,18 +272,33 @@ function StageEmpty({ brokenCount, onPick }: { brokenCount: number; onPick: (id:
 	);
 }
 
+function scanSummary(last: LastScan): string {
+	const read = `Read ${last.processed} ${last.processed === 1 ? "entry" : "entries"}`;
+	const retired =
+		last.retired === 0
+			? "nothing was out of date"
+			: `${last.retired} out-of-date ${last.retired === 1 ? "link or page" : "links or pages"} cleared from the map`;
+	return `${read}; ${retired}.`;
+}
+
 function ScanButton({ overview, onDone, children }: { overview?: Overview; onDone: () => void; children?: React.ReactNode }) {
 	const [progress, setProgress] = React.useState<string>();
+	const [finished, setFinished] = React.useState<LastScan>();
 	const [error, setError] = React.useState<string>();
 	const last = overview?.scan.last;
 
 	const run = async () => {
 		setError(undefined);
+		setFinished(undefined);
+		setProgress("Starting scan…");
 		try {
 			await api.startScan();
 			for (;;) {
 				const step = await api.scanStep();
-				if (step.done) break;
+				if (step.done) {
+					if (step.last) setFinished(step.last);
+					break;
+				}
 				setProgress(`${step.state?.phase === "collect" ? "Reading entries" : "Tidying up"}: ${step.state?.processed ?? 0} read`);
 			}
 			setProgress(undefined);
@@ -303,9 +319,11 @@ function ScanButton({ overview, onDone, children }: { overview?: Overview; onDon
 			</div>
 			<span className="sg-muted" role="status">
 				{progress ??
-					(last
-						? `${last.status === "PARTIAL" ? "Last scan was incomplete" : "Last scanned"} ${new Date(last.finishedAt).toLocaleString()}`
-						: "Never scanned")}
+					(finished
+						? `Scan complete. ${scanSummary(finished)}`
+						: last
+							? `${last.status === "PARTIAL" ? "Last scan was incomplete" : "Last scanned"} ${new Date(last.finishedAt).toLocaleString()}`
+							: "Never scanned")}
 			</span>
 			{last?.status === "PARTIAL" ? (
 				<details className="sg-muted">
