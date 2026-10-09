@@ -37,3 +37,6 @@ export const PROVENANCE_LABEL: Record<Provenance, string> = {
 	DOCUMENTED: "Added by a person",
 	INFERRED: "Guessed",
 };
+
+/** The field a link was found in, from its evidence path ("content[0].markDefs[1]" → "content"). */
+export const fieldName = (path?: string): string => (path ? (path.split(/[.[]/)[0] ?? path) : "");

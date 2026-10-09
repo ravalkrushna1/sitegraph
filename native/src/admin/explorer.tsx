@@ -15,6 +15,7 @@ import {
 	RELATION_LABEL,
 	TYPE_LABEL,
 } from "./api.js";
+import { fieldName } from "../domain/labels.js";
 import { Details } from "./details.js";
 import { GraphCanvas } from "./graph-canvas.js";
 import { type Point, relax, seedRing } from "./layout.js";
@@ -551,7 +552,7 @@ function GraphTable({ nodes, edges, onSelect }: { nodes: Node[]; edges: Edge[]; 
 							</td>
 							<td>
 								{PROVENANCE_LABEL[e.provenance]}
-								{e.evidence?.fieldPath ? `, ${e.evidence.fieldPath}` : ""}
+								{e.evidence?.fieldPath ? `, ${fieldName(e.evidence.fieldPath)} field` : ""}
 							</td>
 						</tr>
 					))}

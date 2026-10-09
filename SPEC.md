@@ -1,6 +1,7 @@
 # SiteGraph — Spec
 
-A living dependency map for an EmDash site. It discovers content entries, their public
+A living dependency map for an EmDash site, in two editions: **SiteGraph** (`native/`, npm,
+interactive graph) and **SiteGraph Lite** (`lite/`, EmDash registry, lists and tables). It discovers content entries, their public
 URLs and the internal links between them, lets people document what the CMS can't see
 (forms, external services, workflows, owners), and answers "if I change this, what might
 be affected?" with the evidence for every step.
@@ -27,6 +28,10 @@ file records what was decided from it and why. Where they disagree, this file wi
 | D12 | A URL's status is recomputed from its current inbound edges (`settleUrl`), never carried over: a published entry there → page; looks like an entry path (fits a routable collection's pattern, no file extension) → **broken**; otherwise → other page (home, listings, feeds), never counted as broken; nothing points at it → removed. Query strings and fragments aren't part of a URL's identity | Carrying the flag over hid real 404s after a slug change and flagged `/`, `/rss.xml` and `?ref=` links as broken. A full scan settles every URL, so a missed hook is always repaired. |
 | D13 | Entries in a non-default locale are mapped without a URL | EmDash adds locale prefixes we don't reproduce; guessing collided translations onto one path. |
 | D14 | Scan steps carry the scan ID and write their state compare-and-set; a scan with no step for 2 minutes can be replaced; a collection that fails to list is recorded and skipped | A reload, a second admin or a deleted collection must not corrupt a scan or leave it stuck. |
+| D15 | **SiteGraph Lite**: a sandboxed edition for the registry, in `lite/`. Same graph rules, scan and operations (imported from `native/src/`); its own Block Kit UI on three sidebar pages (Overview, Explore, Document) plus a widget | The registry only takes sandboxed plugins and can't draw a graph (D1). Pages, not tabs, because Block Kit re-renders after every action and tabs would snap back. Shared code means both editions always agree on what's broken. |
+| D16 | Shared modules (`native/src/domain/`, `scan.ts`, `store.ts`, `graph-service.ts`) import only *types* from `emdash`; each edition validates input itself (native: zod; Lite: hand-written guards) and maps `GraphError` / `ScanConflictError` to its own UI | Sandboxed bundles can't load the native API and shouldn't carry zod (bundle caps). Safety checks that matter (doc links http(s) only, lengths, enums) live in the shared service so neither edition can skip them. |
+| D17 | Lite scans in batches of 5 for at most ~4 s per call, then schedules a one-shot cron a minute later to continue | Cloudflare caps sandboxed calls at 50 ms CPU and 10 subrequests; whether plugin storage calls count is undocumented. Small, resumable steps keep Lite working either way; on Node nothing is enforced. **Unverified on Cloudflare.** |
+| D18 | Each edition keeps its own storage (plugin ID `sitegraph` vs `sitegraph-lite`) | EmDash scopes storage per plugin. A site should install one edition; switching means one rescan, and documented items must be re-added. |
 | D11 | Package `emdash-plugin-sitegraph`, plugin ID `sitegraph`, public repo `ravalkrushna1/sitegraph` | Unscoped ID fits the route URL segment; the npm name is free. |
 
 ## v1 scope

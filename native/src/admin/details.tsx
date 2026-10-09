@@ -14,6 +14,7 @@ import {
 	RELATION_LABEL,
 	TYPE_LABEL,
 } from "./api.js";
+import { fieldName } from "../domain/labels.js";
 import { NodePicker } from "./node-picker.js";
 
 const formatDate = (iso?: string) => (iso ? new Date(iso).toLocaleDateString() : null);
@@ -209,7 +210,7 @@ function Connections({
 							</button>
 							<span className="sg-prov" data-prov={edge.provenance}>
 								{PROVENANCE_LABEL[edge.provenance]}
-								{edge.evidence?.fieldPath ? `, in ${edge.evidence.fieldPath}` : ""}
+								{edge.evidence?.fieldPath ? `, in the ${fieldName(edge.evidence.fieldPath)} field` : ""}
 							</span>
 							{edge.provenance === "DOCUMENTED" ? (
 								<button type="button" className="sg-link sg-danger" onClick={() => void remove(edge)}>

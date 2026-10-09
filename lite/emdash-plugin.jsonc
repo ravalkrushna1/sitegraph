@@ -12,6 +12,17 @@
 	"repo": "https://github.com/ravalkrushna1/sitegraph",
 	"keywords": ["links", "broken links", "dependencies", "impact", "seo"],
 
+	"release": {
+		"artifacts": {
+			"icon": { "file": "./images/icon.png" },
+			"screenshots": [
+				{ "file": "./images/overview.jpg" },
+				{ "file": "./images/impact.jpg" },
+				{ "file": "./images/document.jpg" }
+			]
+		}
+	},
+
 	// Trust contract. Read-only: it reads published entries and collection schemas to find
 	// links, and keeps its map in its own storage. No content writes, no network.
 	// Changing this between releases needs a version bump (installed sites re-consent).

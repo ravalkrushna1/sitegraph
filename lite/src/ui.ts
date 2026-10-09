@@ -9,7 +9,7 @@ import {
 	DOCUMENTED_RELATION_TYPES,
 	type GraphNode,
 } from "../../native/src/domain/graph.js";
-import { PROVENANCE_LABEL, RELATION_LABEL, REVERSE_RELATION_LABEL, TYPE_LABEL } from "../../native/src/domain/labels.js";
+import { fieldName, PROVENANCE_LABEL, RELATION_LABEL, REVERSE_RELATION_LABEL, TYPE_LABEL } from "../../native/src/domain/labels.js";
 import type { LastScan, ScanState } from "../../native/src/scan.js";
 
 export type Node = GraphNode & { id: string };
@@ -99,7 +99,7 @@ export function renderOverview(data: OverviewData, broken: BrokenRow[], notice?:
 			items: [
 				{ label: "Entries", value: c.CONTENT },
 				{ label: "Connections", value: data.edges },
-				{ label: "Broken links", value: data.brokenLinks, ...(data.brokenLinks ? { trend: "down" as const } : {}) },
+				{ label: "Broken links", value: data.brokenLinks },
 				{ label: "Documented things", value: documented },
 			],
 		},
@@ -129,13 +129,13 @@ export function renderOverview(data: OverviewData, broken: BrokenRow[], notice?:
 			columns: [
 				{ key: "path", label: "Links to", format: "code" },
 				{ key: "page", label: "On page" },
-				{ key: "field", label: "Where" },
+				{ key: "field", label: "In field" },
 				{ key: "fix", label: "Fix", format: "element" },
 			],
 			rows: broken.map((row) => ({
 				path: row.path,
 				page: row.page.label,
-				field: row.field ?? "",
+				field: fieldName(row.field),
 				fix: openLink(row.page),
 			})),
 			empty_text: "No broken internal links. Links to your home page, listings and files are never counted as broken.",
