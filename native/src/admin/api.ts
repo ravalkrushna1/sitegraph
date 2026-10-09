@@ -86,30 +86,7 @@ export const api = {
 
 export const message = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
-export const TYPE_LABEL: Record<NodeType, string> = {
-	CONTENT: "Entry",
-	URL: "URL",
-	FORM: "Form",
-	SERVICE: "Service",
-	WORKFLOW: "Workflow",
-	TEAM_MEMBER: "Person or team",
-};
-
-export const RELATION_LABEL: Record<RelationType, string> = {
-	PUBLISHES_AS: "is published at",
-	LINKS_TO: "links to",
-	SUBMITS_TO: "submits to",
-	DEPENDS_ON: "depends on",
-	PART_OF: "is part of",
-	OWNED_BY: "is owned by",
-	RELATED_TO: "is related to",
-};
-
-export const PROVENANCE_LABEL = {
-	DISCOVERED: "Found by scan",
-	DOCUMENTED: "Added by a person",
-	INFERRED: "Guessed",
-} as const;
+export { PROVENANCE_LABEL, RELATION_LABEL, TYPE_LABEL } from "../domain/labels.js";
 
 /** A URL node with no published entry behind it: an internal link that leads nowhere. */
 export const isBroken = (node: Pick<Node, "type" | "resolved">): boolean => node.type === "URL" && node.resolved === false;
