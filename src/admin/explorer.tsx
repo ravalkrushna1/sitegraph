@@ -140,10 +140,9 @@ export function Explorer() {
 					<h1>SiteGraph</h1>
 					<p className="sg-muted">How your pages, links and the services behind them depend on each other.</p>
 				</div>
-				<div className="sg-row">
-					<ScanButton overview={overview} onDone={() => void refresh()} />
+				<ScanButton overview={overview} onDone={() => void refresh()}>
 					<ExportButton disabled={!hasData} />
-				</div>
+				</ScanButton>
 			</header>
 
 			{overviewError ? <p role="alert" className="sg-error">{overviewError}</p> : null}
@@ -179,9 +178,7 @@ export function Explorer() {
 								<Loader />
 							</div>
 						) : nodes.length === 0 ? (
-							<div className="sg-stage-empty">
-								<p>Search for a page, URL or service on the left to see what it's connected to.</p>
-							</div>
+							<StageEmpty brokenCount={overview?.brokenLinks ?? 0} onPick={(id) => void focus(id)} />
 						) : view === "graph" ? (
 							<>
 								<GraphCanvas
@@ -248,7 +245,33 @@ function Stats({ overview }: { overview: Overview }) {
 	);
 }
 
-function ScanButton({ overview, onDone }: { overview?: Overview; onDone: () => void }) {
+function StageEmpty({ brokenCount, onPick }: { brokenCount: number; onPick: (id: string) => void }) {
+	const [error, setError] = React.useState<string>();
+	const showBroken = async () => {
+		try {
+			const first = (await api.search("", { broken: true })).items[0];
+			if (first) onPick(first.id);
+		} catch (e) {
+			setError(message(e));
+		}
+	};
+	return (
+		<div className="sg-stage-empty">
+			<div className="sg-stage-empty-body">
+				<h2>Pick a starting point</h2>
+				<p>Choose a page, URL or service on the left to see what it's connected to. A key page like your pricing or sign-up page is a good first look.</p>
+				{brokenCount > 0 ? (
+					<Button onClick={() => void showBroken()}>
+						{brokenCount === 1 ? "Show the broken link" : `Show a broken link (${brokenCount})`}
+					</Button>
+				) : null}
+				{error ? <p role="alert" className="sg-error">{error}</p> : null}
+			</div>
+		</div>
+	);
+}
+
+function ScanButton({ overview, onDone, children }: { overview?: Overview; onDone: () => void; children?: React.ReactNode }) {
 	const [progress, setProgress] = React.useState<string>();
 	const [error, setError] = React.useState<string>();
 	const last = overview?.scan.last;
@@ -272,9 +295,12 @@ function ScanButton({ overview, onDone }: { overview?: Overview; onDone: () => v
 
 	return (
 		<div className="sg-scan">
-			<Button variant="primary" onClick={() => void run()} loading={!!progress} disabled={!!progress}>
-				{last ? "Rescan site" : "Scan site"}
-			</Button>
+			<div className="sg-row">
+				{children}
+				<Button variant="primary" onClick={() => void run()} loading={!!progress} disabled={!!progress}>
+					{last ? "Rescan site" : "Scan site"}
+				</Button>
+			</div>
 			<span className="sg-muted" role="status">
 				{progress ??
 					(last
@@ -328,7 +354,7 @@ function Finder({ onPick, onCreated, brokenCount }: { onPick: (id: string) => vo
 	return (
 		<nav className="sg-finder" aria-label="Find in graph">
 			<Input label="Search" type="search" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Title or /path" />
-			<div className="sg-row">
+			<div className="sg-filters">
 				<select aria-label="Type" value={type} onChange={(e) => setType(e.target.value as NodeType | "")} disabled={broken}>
 					<option value="">All types</option>
 					{NODE_TYPES.map((t) => (
@@ -347,10 +373,10 @@ function Finder({ onPick, onCreated, brokenCount }: { onPick: (id: string) => vo
 				{items.map((n) => (
 					<li key={n.id}>
 						<button type="button" onClick={() => onPick(n.id)}>
-							<span className="sg-kind" data-type={n.type}>
+							<span className="sg-result-label">{n.label}</span>
+							<span className="sg-kind" data-type={n.type} data-broken={isBroken(n) || undefined}>
 								{isBroken(n) ? "Broken link" : TYPE_LABEL[n.type]}
 							</span>
-							<span className="sg-result-label">{n.label}</span>
 						</button>
 					</li>
 				))}

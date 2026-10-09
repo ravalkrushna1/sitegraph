@@ -93,11 +93,18 @@
 }
 
 .sg-scan {
-	display: flex;
-	flex-wrap: wrap;
-	align-items: center;
-	gap: 0.5rem;
+	display: grid;
+	justify-items: end;
+	gap: 0.35rem;
 	max-width: 32rem;
+	text-align: right;
+}
+
+@media (max-width: 760px) {
+	.sg-scan {
+		justify-items: start;
+		text-align: left;
+	}
 }
 
 /* Stats: plain numbers, one alert state. */
@@ -141,10 +148,15 @@
 
 /* Workspace: finder | graph | details. Collapses rather than clipping (no fixed page height). */
 .sg-workspace {
+	--sg-panel-h: clamp(30rem, calc(100vh - 16rem), 48rem);
 	display: grid;
 	grid-template-columns: 16rem minmax(0, 1fr);
 	gap: 1rem;
 	align-items: start;
+}
+
+.sg-workspace > :is(.sg-finder, .sg-stage, .sg-details) {
+	height: var(--sg-panel-h);
 }
 
 .sg-workspace[data-has-details] {
@@ -160,10 +172,25 @@
 	}
 }
 
+@media (max-width: 1180px) {
+	.sg-workspace[data-has-details] .sg-details {
+		height: auto;
+	}
+}
+
 @media (max-width: 760px) {
 	.sg-workspace,
 	.sg-workspace[data-has-details] {
 		grid-template-columns: minmax(0, 1fr);
+	}
+	.sg-workspace > :is(.sg-finder, .sg-details) {
+		height: auto;
+	}
+	.sg-workspace > .sg-stage {
+		height: 32rem;
+	}
+	.sg-results {
+		max-height: 16rem;
 	}
 }
 
@@ -178,8 +205,20 @@
 
 .sg-finder {
 	padding: 0.75rem;
-	display: grid;
+	display: flex;
+	flex-direction: column;
 	gap: 0.6rem;
+}
+
+.sg-filters {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 0.5rem 0.75rem;
+}
+
+.sg-filters select {
+	flex: 1 1 8rem;
 }
 
 .sg-results,
@@ -191,13 +230,42 @@
 }
 
 .sg-results {
-	max-height: 26rem;
+	flex: 1 1 auto;
+	min-height: 0;
 	overflow-y: auto;
-	display: grid;
-	gap: 2px;
+	margin: 0 -0.35rem;
+	padding-top: 0.25rem;
+	border-top: 1px solid var(--sg-hair);
 }
 
-.sg-results button,
+.sg-results button {
+	display: flex;
+	align-items: baseline;
+	gap: 0.5rem;
+	width: 100%;
+	text-align: left;
+	padding: 0.4rem 0.6rem;
+	border: 0;
+	border-radius: 6px;
+	background: none;
+	color: inherit;
+	cursor: pointer;
+}
+
+.sg-results .sg-result-label {
+	flex: 1 1 auto;
+	min-width: 0;
+}
+
+.sg-results .sg-kind {
+	flex: none;
+	white-space: nowrap;
+}
+
+.sg-results > .sg-muted {
+	padding: 0.4rem 0.6rem;
+}
+
 .sg-options button {
 	display: grid;
 	gap: 0.1rem;
@@ -226,40 +294,77 @@
 	color: var(--sg-subtle);
 }
 
-.sg-kind[data-type="URL"] {
-	font-family: inherit;
+.sg-kind[data-broken] {
+	color: var(--sg-danger);
+	font-weight: 600;
 }
 
 .sg-check {
 	display: inline-flex;
-	gap: 0.35rem;
+	gap: 0.4rem;
+	cursor: pointer;
 	align-items: center;
 	font-size: 0.8125rem;
 }
 
-/* Native controls styled to sit next to Kumo inputs. */
+/* Native controls drawn to Kumo's input spec (36px, 8px radius, inset ring) so they sit
+   flush with Kumo <Input>s. */
 .sg-root select,
 .sg-root textarea,
 .sg-root input[type="search"]:not([class]) {
 	font: inherit;
 	font-size: 0.875rem;
 	color: var(--sg-text);
-	background: var(--sg-raised);
-	border: 1px solid var(--sg-line);
-	border-radius: 6px;
-	padding: 0.35rem 0.5rem;
+	background-color: var(--sg-raised);
+	border: 0;
+	box-shadow: inset 0 0 0 1px var(--sg-line);
+	border-radius: 8px;
 	min-width: 0;
 	max-width: 100%;
+	outline: none;
+}
+
+.sg-root select,
+.sg-root input[type="search"]:not([class]) {
+	height: 2.25rem;
+	padding: 0 0.75rem;
+}
+
+.sg-root select {
+	appearance: none;
+	padding-right: 2rem;
+	/* Mid-grey caret reads on both themes; CSS variables can't reach into a data URI. */
+	background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath d='M3 4.5 6 7.5 9 4.5' fill='none' stroke='%238a8a90' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+	background-repeat: no-repeat;
+	background-position: right 0.7rem center;
+	cursor: pointer;
+}
+
+.sg-root select:disabled {
+	opacity: 0.5;
+	cursor: not-allowed;
 }
 
 .sg-root textarea {
 	width: 100%;
+	padding: 0.5rem 0.75rem;
 	resize: vertical;
 }
 
-.sg-root :is(button, a, select, textarea, input):focus-visible {
+.sg-root :is(select, textarea, input[type="search"]:not([class])):focus-visible {
+	box-shadow: inset 0 0 0 2px var(--sg-focus);
+}
+
+.sg-root :is(button, a):focus-visible {
 	outline: 2px solid var(--sg-focus);
 	outline-offset: 2px;
+}
+
+.sg-root input[type="checkbox"] {
+	accent-color: var(--sg-brand);
+	width: 1rem;
+	height: 1rem;
+	margin: 0;
 }
 
 .sg-field {
@@ -300,8 +405,14 @@
 
 /* Stage */
 .sg-stage {
-	display: grid;
+	display: flex;
+	flex-direction: column;
 	overflow: hidden;
+}
+
+.sg-stage > :is(.sg-canvas, .sg-stage-empty, .sg-table-wrap) {
+	flex: 1 1 auto;
+	min-height: 0;
 }
 
 .sg-stage-bar {
@@ -319,10 +430,16 @@
 }
 
 .sg-stage-empty {
-	min-height: 26rem;
 	display: grid;
 	place-items: center;
 	padding: 2rem;
+}
+
+.sg-stage-empty-body {
+	display: grid;
+	justify-items: center;
+	gap: 0.6rem;
+	max-width: 26rem;
 	text-align: center;
 	color: var(--sg-subtle);
 }
@@ -380,7 +497,6 @@
 /* Canvas. A tall minimum, never a fixed page height. */
 .sg-canvas {
 	position: relative;
-	height: clamp(26rem, 68vh, 46rem);
 }
 
 .sg-svg {
@@ -541,6 +657,7 @@
 .sg-details {
 	display: grid;
 	align-content: start;
+	overflow-y: auto;
 }
 
 .sg-details-head {
@@ -632,8 +749,7 @@
 
 /* Table view */
 .sg-table-wrap {
-	overflow-x: auto;
-	max-height: 46rem;
+	overflow: auto;
 }
 
 .sg-table {
