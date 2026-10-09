@@ -11,7 +11,10 @@
 		},
 		"./admin": "./src/admin/index.tsx"
 	},
-	"files": ["dist", "src"],
+	"files": [
+		"dist",
+		"src"
+	],
 	"scripts": {
 		"build": "tsdown src/index.ts --format esm --dts --clean",
 		"dev": "tsdown src/index.ts --format esm --dts --watch",
@@ -26,13 +29,17 @@
 	"devDependencies": {
 		"@cloudflare/kumo": "2.6.0",
 		"@types/react": "^19.0.0",
+		"astro": "7.3.8",
 		"emdash": "1.2.0",
 		"react": "19.2.4",
 		"tsdown": "^0.20.0",
 		"typescript": "^5.9.0",
 		"vitest": "^4.1.0"
 	},
-	"keywords": ["emdash", "emdash-plugin"],
+	"keywords": [
+		"emdash",
+		"emdash-plugin"
+	],
 	"repository": {
 		"type": "git",
 		"url": "git+https://github.com/ravalkrushna1/sitegraph.git"
